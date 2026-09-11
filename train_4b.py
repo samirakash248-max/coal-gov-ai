@@ -54,7 +54,7 @@ def main(smoke_test=False):
         BASE_MODEL_NAME,
         quantization_config=bnb_config,
         device_map="auto",
-        torch_dtype=torch.float16, # Force FP16 globally so config.json doesn't inject BF16 causing AMP crashes on T4
+        dtype=torch.float16, # Force FP16 globally so config.json doesn't inject BF16 causing AMP crashes on T4
         trust_remote_code=True
     )
     
@@ -121,6 +121,12 @@ def main(smoke_test=False):
         processing_class=tokenizer,
     )
     
+    # FORCING TRAINABLE PARAMETERS TO FLOAT32
+    # This prevents BFloat16 gradients from being generated, which crashes the FP16 GradScaler on T4.
+    for name, p in trainer.model.named_parameters():
+        if p.requires_grad:
+            p.data = p.data.to(torch.float32)
+            
     # 8. Train
     print("Starting training...")
     trainer.train()
