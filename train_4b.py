@@ -50,6 +50,7 @@ def main():
         BASE_MODEL_NAME,
         quantization_config=bnb_config,
         device_map="auto",
+        torch_dtype=torch.float16, # Force FP16 globally so config.json doesn't inject BF16 causing AMP crashes on T4
         trust_remote_code=True
     )
     
@@ -90,14 +91,13 @@ def main():
         fp16=True,   # Enabled for T4 (Turing)
         bf16=False,  # Disabled for T4 (Turing)
         max_grad_norm=0.3,
-        warmup_ratio=0.03,
-        group_by_length=True,
+        warmup_steps=10, # Replaces warmup_ratio which is unsupported in this TRL version
         lr_scheduler_type="cosine",
         eval_strategy="steps",
         eval_steps=100,
         gradient_checkpointing=True,
         dataset_text_field="messages",
-        max_seq_length=128, # Perfectly covers V3 dataset (max token length observed: 96)
+        max_length=128, # Replaces max_seq_length. Perfectly covers V3 dataset (max token length observed: 96)
         report_to="none",  
     )
     
