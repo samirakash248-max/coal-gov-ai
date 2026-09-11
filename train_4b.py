@@ -1,5 +1,6 @@
 import os
 import torch
+import argparse
 from datasets import load_dataset
 from transformers import (
     AutoModelForCausalLM,
@@ -28,7 +29,10 @@ def format_prompt(item):
     # to the 'messages' column if it exists and matches the tokenizer chat template.
     return item
 
-def main():
+def main(smoke_test=False):
+    if smoke_test:
+        print("=== RUNNING IN SMOKE TEST MODE (max_steps=5) ===")
+        
     print(f"Preparing to train {BASE_MODEL_NAME} using 4-bit QLoRA...")
     
     # 1. Load tokenizer
@@ -74,6 +78,11 @@ def main():
     print("Loading V3 dataset...")
     dataset = load_dataset("json", data_files={"train": TRAIN_DATA, "validation": VAL_DATA})
     
+    # Determine steps based on mode
+    max_steps = 5 if smoke_test else -1
+    save_steps = 2 if smoke_test else 100
+    eval_steps = 2 if smoke_test else 100
+
     # 6. Training Arguments
     # Adjusted for T4 VRAM (14.5GB), using bs=1, grad accum=16. 
     training_args = SFTConfig(
@@ -84,17 +93,18 @@ def main():
         per_device_eval_batch_size=1,
         optim="paged_adamw_8bit",
         save_strategy="steps",
-        save_steps=100,
-        logging_steps=10,
+        save_steps=save_steps,
+        logging_steps=1 if smoke_test else 10,
         learning_rate=2e-5,
         weight_decay=0.001,
         fp16=True,   # Enabled for T4 (Turing)
         bf16=False,  # Disabled for T4 (Turing)
         max_grad_norm=0.3,
-        warmup_steps=10, # Replaces warmup_ratio which is unsupported in this TRL version
+        warmup_steps=1 if smoke_test else 10, # Replaces warmup_ratio which is unsupported in this TRL version
+        max_steps=max_steps,
         lr_scheduler_type="cosine",
         eval_strategy="steps",
-        eval_steps=100,
+        eval_steps=eval_steps,
         gradient_checkpointing=True,
         dataset_text_field="messages",
         max_length=128, # Replaces max_seq_length. Perfectly covers V3 dataset (max token length observed: 96)
@@ -123,4 +133,8 @@ def main():
     print("Training complete!")
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Qwen3-4B Production Training")
+    parser.add_argument("--smoke-test", action="store_true", help="Run a 5-step smoke test")
+    args = parser.parse_args()
+    
+    main(smoke_test=args.smoke_test)
