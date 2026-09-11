@@ -41,11 +41,11 @@ def main():
         load_in_4bit=True,
         bnb_4bit_use_double_quant=True,
         bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=torch.bfloat16
+        bnb_4bit_compute_dtype=torch.float16 # T4 uses FP16, BF16 causes slow down/crash
     )
     
     # 3. Load Base Model
-    print("Loading base model in 4-bit (Requires ~3.5GB VRAM just for weights)...")
+    print("Loading base model in 4-bit...")
     model = AutoModelForCausalLM.from_pretrained(
         BASE_MODEL_NAME,
         quantization_config=bnb_config,
@@ -53,11 +53,11 @@ def main():
         trust_remote_code=True
     )
     
+    from peft import prepare_model_for_kbit_training
     model = prepare_model_for_kbit_training(model)
     model.config.use_cache = False  # Required for gradient checkpointing
     
     # 4. LoRA Config for 4B
-    # Increased rank (r=32) for better semantic capability compared to the 0.6B model
     lora_config = LoraConfig(
         r=32,
         lora_alpha=64,
@@ -66,29 +66,30 @@ def main():
         bias="none",
         task_type="CAUSAL_LM"
     )
-    model = get_peft_model(model, lora_config)
+    # BUG FIX: Do NOT call get_peft_model here because SFTTrainer will apply it.
+    # Doing it twice causes issues in newer TRL versions.
     
     # 5. Load Dataset
     print("Loading V3 dataset...")
     dataset = load_dataset("json", data_files={"train": TRAIN_DATA, "validation": VAL_DATA})
     
     # 6. Training Arguments
-    # Adjusted for a strong GPU (batch size 4, gradient accum 4 -> effective batch size 16)
+    # Adjusted for T4 VRAM (14.5GB), using bs=1, grad accum=16. 
     training_args = SFTConfig(
         output_dir=OUTPUT_DIR,
         num_train_epochs=2,
-        per_device_train_batch_size=4,
-        gradient_accumulation_steps=4,
-        per_device_eval_batch_size=4,
-        optim="paged_adamw_32bit",
+        per_device_train_batch_size=1,
+        gradient_accumulation_steps=16,
+        per_device_eval_batch_size=1,
+        optim="paged_adamw_8bit",
+        save_strategy="steps",
         save_steps=100,
         logging_steps=10,
         learning_rate=2e-5,
         weight_decay=0.001,
-        fp16=False,
-        bf16=True, # Use bfloat16 on Ampere+ GPUs (A10, A100, RTX 30/40 series)
+        fp16=True,   # Enabled for T4 (Turing)
+        bf16=False,  # Disabled for T4 (Turing)
         max_grad_norm=0.3,
-        max_steps=-1,
         warmup_ratio=0.03,
         group_by_length=True,
         lr_scheduler_type="cosine",
@@ -96,8 +97,8 @@ def main():
         eval_steps=100,
         gradient_checkpointing=True,
         dataset_text_field="messages",
-        max_seq_length=512,
-        report_to="none",  # Prevent Weights & Biases from pausing the script in Colab asking for a login
+        max_seq_length=128, # Perfectly covers V3 dataset (max token length observed: 96)
+        report_to="none",  
     )
     
     # 7. Initialize Trainer
